@@ -408,14 +408,11 @@ FunctionEnd
 ; 创建订单
 ;------------------------------------------------------
 Function CreatePaymentOrder
+  ; 生成订单号：纯字符串拼接，完全不用 IntOp
   ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
-  IntOp $7 $2 * 1000000
-  IntOp $7 $7 + $4 * 10000
-  IntOp $7 $7 + $5 * 100
-  IntOp $7 $7 + $6
-  System::Call 'kernel32::GetTickCount()i.r8'
-  IntOp $8 $8 % 10000
-  StrCpy $OrderId "$7$8"
+  ; $2=年 $4=月 $5=日 $6=时间
+  System::Call 'kernel32::GetTickCount()i.r0'
+  StrCpy $OrderId "$2$4$5$6$0"
 
   StrCpy $0 '{"order_id":"$OrderId","amount":$ProductAmount,"payment_type":"$PaymentType","product":"$ProductName"}'
 
@@ -449,10 +446,10 @@ Function CreatePaymentOrder
       SetCtlColors $Label_Status ${COLOR_TEXT} transparent
       ${NSD_SetText} $Label_Status "📱 请用手机扫描二维码完成支付"
     ${Else}
-      Call ShowError "获取二维码失败，请重试"
+      Call ShowError_GetQR
     ${EndIf}
   ${Else}
-    Call ShowError "网络连接失败，请检查网络"
+    Call ShowError_Network
   ${EndIf}
 
 FunctionEnd
@@ -462,7 +459,7 @@ FunctionEnd
 ;------------------------------------------------------
 Function OnCheckPayment
   ${If} $OrderId == ""
-    Call ShowError "请先选择支付方式并创建订单"
+    Call ShowError_NoOrder
     Return
   ${EndIf}
 
@@ -508,25 +505,44 @@ Function CheckPaymentStatus
     ${ElseIf} $2 == "expired"
       StrCpy $OrderId ""
       StrCpy $StepCompleted "0"
-      Call ShowError "⏰ 订单已过期，请重新选择支付方式"
+      Call ShowError_Expired
     ${Else}
       SetCtlColors $Label_Status ${COLOR_WARN} transparent
       ${NSD_SetText} $Label_Status "⏳ 尚未检测到支付，请确认扫码并完成付款"
     ${EndIf}
   ${Else}
-    Call ShowError "验证请求失败，请检查网络"
+    Call ShowError_VerifyFail
   ${EndIf}
 
 FunctionEnd
 
 ;------------------------------------------------------
-; 显示错误
+; 错误提示函数（独立命名，避免 Call 传参问题）
 ;------------------------------------------------------
-Function ShowError
-  Exch $R0
+Function ShowError_GetQR
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
-  ${NSD_SetText} $Label_Status "❌ $R0"
-  Pop $R0
+  ${NSD_SetText} $Label_Status "❌ 获取二维码失败，请重试"
+FunctionEnd
+
+Function ShowError_Network
+  SetCtlColors $Label_Status ${COLOR_ERROR} transparent
+  ${NSD_SetText} $Label_Status "❌ 网络连接失败，请检查网络"
+FunctionEnd
+
+Function ShowError_NoOrder
+  MessageBox MB_OK|MB_ICONEXCLAMATION "请先选择支付方式并创建订单"
+FunctionEnd
+
+Function ShowError_Expired
+  SetCtlColors $Label_Status ${COLOR_ERROR} transparent
+  ${NSD_SetText} $Label_Status "⏰ 订单已过期，请重新选择支付方式"
+  StrCpy $OrderId ""
+  StrCpy $StepCompleted "0"
+FunctionEnd
+
+Function ShowError_VerifyFail
+  SetCtlColors $Label_Status ${COLOR_ERROR} transparent
+  ${NSD_SetText} $Label_Status "❌ 验证请求失败，请检查网络"
 FunctionEnd
 
 ;------------------------------------------------------
