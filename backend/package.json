@@ -1,0 +1,14 @@
+{
+  "name": "pay-launcher-backend",
+  "version": "1.0.0",
+  "description": "付费启动器 - 支付验证后端服务",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0"
+  }
+}
