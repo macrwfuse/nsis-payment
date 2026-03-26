@@ -500,7 +500,8 @@ Function CheckPaymentStatus
       ${NSD_SetText} $Label_Subtitle "正在为您启动 $ProductName ..."
 
       Sleep 1500
-      nsDialogs::CloseDialog
+      ; 关闭对话框，进入下一步
+      SendMessage $Dialog ${WM_CLOSE} 0 0
 
     ${ElseIf} $2 == "expired"
       StrCpy $OrderId ""
