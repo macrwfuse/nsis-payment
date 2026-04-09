@@ -98,21 +98,18 @@ Var hBitmap_Placeholder   ; 占位图 GDI 句柄
 Page custom PaymentPage PaymentPageLeave
 
 ;------------------------------------------------------
-; [关键] 预释放区段 - 在页面显示前释放 curl.exe
-; 隐藏 Section（名称以 - 开头）在自定义页面之前执行
-; $PLUGINSDIR 由 MUI 自动管理，不需要手动创建目录
+; [关键] 预释放区段 - 在页面显示之前释放所有资源
+; NSIS 执行顺序：隐藏 Section → Page custom → Section Main
+; 所以所有页面需要的文件必须在这里释放！
 ;------------------------------------------------------
 Section "-PreExtract"
   InitPluginsDir
+
+  ; 释放 curl.exe 到 $PLUGINSDIR（页面函数用）
   SetOutPath "$PLUGINSDIR"
   File "assets\curl.exe"
-SectionEnd
 
-;------------------------------------------------------
-; 安装区段 - 释放其他资源
-;------------------------------------------------------
-Section "Main"
-
+  ; 释放所有资源到 $TEMP\PayLauncher（页面函数用）
   CreateDirectory "$TEMP\PayLauncher"
   CreateDirectory "$TEMP\PayLauncher\assets"
 
@@ -127,7 +124,7 @@ Section "Main"
   File "assets\curl.exe"
   File "run.exe"
 
-  ; 初始化
+  ; 初始化变量（放这里，Section Main 可能太晚）
   StrCpy $PayApiUrl "https://your-server.com/api/payment"
   StrCpy $ProductAmount "9.90"
   StrCpy $ProductName "专业版激活码"
@@ -138,7 +135,13 @@ Section "Main"
   StrCpy $OrderId ""
   StrCpy $hBitmap_QR "0"
   StrCpy $hBitmap_Placeholder "0"
+SectionEnd
 
+;------------------------------------------------------
+; 安装区段 - Section Main 在页面之后执行，只做最终处理
+;------------------------------------------------------
+Section "Main"
+  ; 文件已在 "-PreExtract" 中释放，这里无需重复
 SectionEnd
 
 ;------------------------------------------------------
