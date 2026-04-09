@@ -159,8 +159,8 @@ Function .onGUIInit
   System::Call "user32::GetSystemMetrics(i 1)i.r1"  ; SM_CYSCREEN
 
   ; 计算窗口居中位置
-  IntOp $2 ${WINDOW_W}
-  IntOp $3 ${WINDOW_H}
+  StrCpy $2 ${WINDOW_W}
+  StrCpy $3 ${WINDOW_H}
   IntOp $4 $0 - $2
   IntOp $4 $4 / 2
   IntOp $5 $1 - $3
