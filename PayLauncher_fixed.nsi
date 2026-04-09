@@ -276,53 +276,24 @@ Function PaymentPage
 
   nsDialogs::Show
 
-  ; ===== 修复：统一清理所有字体句柄 =====
-  !insertmacro CleanUpFonts
-
-FunctionEnd
-
-;------------------------------------------------------
-; 字体清理宏
-;------------------------------------------------------
-!macro CleanUpFonts
-  ${If} $hFont_Title != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Title)'
-  ${EndIf}
-  ${If} $hFont_Subtitle != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Subtitle)'
-  ${EndIf}
-  ${If} $hFont_Amount != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Amount)'
-  ${EndIf}
-  ${If} $hFont_Button != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Button)'
-  ${EndIf}
-  ${If} $hFont_ButtonSmall != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_ButtonSmall)'
-  ${EndIf}
-  ${If} $hFont_Step != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Step)'
-  ${EndIf}
-  ${If} $hFont_StepLabel != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_StepLabel)'
-  ${EndIf}
-  ${If} $hFont_Status != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Status)'
-  ${EndIf}
-  ${If} $hFont_Footer != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Footer)'
-  ${EndIf}
-  ${If} $hFont_QRTitle != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_QRTitle)'
-  ${EndIf}
-  ${If} $hFont_Small != ""
-    System::Call 'gdi32::DeleteObject(i $hFont_Small)'
-  ${EndIf}
+  ; 释放所有字体句柄
+  System::Call 'gdi32::DeleteObject(i $hFont_Title)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Subtitle)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Amount)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Button)'
+  System::Call 'gdi32::DeleteObject(i $hFont_ButtonSmall)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Step)'
+  System::Call 'gdi32::DeleteObject(i $hFont_StepLabel)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Status)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Footer)'
+  System::Call 'gdi32::DeleteObject(i $hFont_QRTitle)'
+  System::Call 'gdi32::DeleteObject(i $hFont_Small)'
   ; 释放二维码位图
   ${If} $hQRBitmap != ""
     ${NSD_FreeImage} $hQRBitmap
   ${EndIf}
-!macroend
+
+FunctionEnd
 
 ;------------------------------------------------------
 ; 创建步骤指示器 (88u ~ 115u)
