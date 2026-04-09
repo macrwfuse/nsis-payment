@@ -1,6 +1,6 @@
 ;======================================================
-; 付费启动器 — v7.1 自动轮询支付 (修复版)
-; 修复：SetTimer 回调机制、GDI 句柄清理、路径健壮性
+; 付费启动器 — v7.2 自动轮询支付 (修复版)
+; 修复：SetTimer 回调、curl.exe 释放时机、GDI 清理、路径统一
 ;======================================================
 
 !include "MUI2.nsh"
@@ -37,14 +37,25 @@ Var ProductName
 Var hFont1
 Var hFont2
 Var PollingActive        ; 1=正在轮询, 0=已停止
+Var CurlPath              ; curl.exe 实际路径
 
 Page custom PayPage PayPageLeave
 
 ;------------------------------------------------------
-; 主区段 - 释放资源
+; [关键修复] 预释放区段 - 在页面显示前释放 curl.exe
+; $PLUGINSDIR 由 MUI 在页面函数之前自动创建
+;------------------------------------------------------
+Section "-PreExtract"
+  ; 确保 $PLUGINSDIR 存在（MUI 通常会创建，但保险起见）
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "assets\curl.exe"
+SectionEnd
+
+;------------------------------------------------------
+; 主区段 - 释放其他资源（在用户交互之后执行）
 ;------------------------------------------------------
 Section "Main"
-  ; 先创建目录
   CreateDirectory "$INSTDIR"
 
   SetOutPath "$INSTDIR"
@@ -65,6 +76,12 @@ SectionEnd
 ;======================================================
 Function PayPage
   !insertmacro MUI_HEADER_TEXT "" ""
+
+  ; ===== [关键] 确定 curl.exe 路径 =====
+  ; 优先用 $PLUGINSDIR（预释放），备用 $INSTDIR
+  StrCpy $CurlPath "$PLUGINSDIR\curl.exe"
+  IfFileExists "$CurlPath" +2 0
+    StrCpy $CurlPath "$INSTDIR\curl.exe"
 
   nsDialogs::Create 1018
   Pop $Dialog
@@ -94,49 +111,44 @@ Function PayPage
   ; 自动创建订单 + 打开浏览器
   Call AutoCreateOrder
 
-  ; ===== [修复1] 使用手动消息循环 + SetTimer 替代不可靠的回调 =====
+  ; ===== 手动消息循环 + SetTimer 轮询 =====
   ${If} $OrderId != ""
     StrCpy $PollingActive "1"
 
-    ; 设置 Windows 定时器（向对话框窗口发 WM_TIMER 消息）
     System::Call "user32::SetTimer(i $Dialog, i ${TIMER_ID}, i ${POLL_INTERVAL}, i 0)"
 
-    ; 手动消息循环：PeekMessage 非阻塞，每轮检查定时器
     loop_msg:
       ${If} $PollingActive != "1"
         Goto end_msg
       ${EndIf}
 
-      ; 非阻塞获取消息（PM_REMOVE = 取出并分发）
-      System::Call "user32::PeekMessage(*i0r0, i $Dialog, i 0, i 0, i 1)i.r1"
+      System::Alloc 28
+      Pop $9
+      System::Call "user32::PeekMessage(i r9, i $Dialog, i 0, i 0, i 1)i.r1"
       ${If} $1 != 0
-        ; 检查是否是退出消息
-        System::Call "*$0(i .r2)"
+        System::Call "*$9(i .r2)"
         ${If} $2 == ${WM_QUIT}
+          System::Free $9
           Goto end_msg
         ${EndIf}
-        ; 分发消息（TranslateMessage + DispatchMessage）
-        System::Call "user32::TranslateMessage(i r0)"
-        System::Call "user32::DispatchMessageA(i r0)"
-
-        ; 检查是否收到 WM_TIMER（定时器触发轮询）
+        System::Call "user32::TranslateMessage(i r9)"
+        System::Call "user32::DispatchMessageA(i r9)"
         ${If} $2 == ${WM_TIMER}
-          System::Call "*$0(i .r2, i .r3, i .r4, i .r5)"
+          System::Call "*$9(i .r2, i .r3, i .r4, i .r5)"
           ${If} $4 == ${TIMER_ID}
             Call PollPaymentStatus
           ${EndIf}
         ${EndIf}
       ${EndIf}
+      System::Free $9
 
-      ; 短暂休眠，降低 CPU 占用
       Sleep 50
       Goto loop_msg
 
     end_msg:
-    ; 清理定时器
     System::Call "user32::KillTimer(i $Dialog, i ${TIMER_ID})"
   ${Else}
-    ; 没有成功创建订单，用标准模态显示（让用户点退出）
+    ; 没成功创建订单，标准模态显示让用户点退出
     nsDialogs::Show
   ${EndIf}
 
@@ -146,17 +158,16 @@ Function PayPage
 FunctionEnd
 
 ;======================================================
-; [修复2] 轮询支付状态（独立函数，从消息循环调用）
+; 轮询支付状态
 ;======================================================
 Function PollPaymentStatus
   ${If} $OrderId == ""
     Return
   ${EndIf}
 
-  ; ====== [修复3] 路径检查 + 使用 $INSTDIR ======
-  IfFileExists "$INSTDIR\curl.exe" 0 poll_fail
+  IfFileExists "$CurlPath" 0 poll_fail
 
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 5 --max-time 8 "$PayApiUrl/check_status?order_id=$OrderId"'
+  nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 5 --max-time 8 "$PayApiUrl/check_status?order_id=$OrderId"'
   Pop $0
   Pop $1
 
@@ -167,17 +178,14 @@ Function PollPaymentStatus
     Pop $2
 
     ${If} $2 == "paid"
-      ; 停止轮询
       StrCpy $PollingActive "0"
       System::Call "user32::KillTimer(i $Dialog, i ${TIMER_ID})"
 
-      ; 更新界面
       SetCtlColors $Label_Status "00A854" transparent
       ${NSD_SetText} $Label_Status "支付成功！正在启动程序..."
       ${NSD_SetText} $Label_Info "支付已完成，感谢购买！"
       Sleep 1500
 
-      ; 发送 WM_CLOSE 关闭对话框（退出消息循环）
       SendMessage $Dialog ${WM_CLOSE} 0 0
     ${EndIf}
   ${EndIf}
@@ -185,11 +193,10 @@ Function PollPaymentStatus
   Return
 
   poll_fail:
-    ; curl.exe 不存在，停止轮询并报错
     StrCpy $PollingActive "0"
     System::Call "user32::KillTimer(i $Dialog, i ${TIMER_ID})"
     SetCtlColors $Label_Status "F5222D" transparent
-    ${NSD_SetText} $Label_Status "错误：找不到 curl.exe（$INSTDIR\curl.exe）"
+    ${NSD_SetText} $Label_Status "错误：找不到 curl.exe$\r$\n检查路径：$CurlPath"
 FunctionEnd
 
 ;======================================================
@@ -197,10 +204,10 @@ FunctionEnd
 ;======================================================
 Function AutoCreateOrder
 
-  ; ====== [修复4] 检查 curl.exe 是否存在 ======
-  IfFileExists "$INSTDIR\curl.exe" curl_ok
+  ; 检查 curl.exe
+  IfFileExists "$CurlPath" curl_ok
     SetCtlColors $Label_Status "F5222D" transparent
-    ${NSD_SetText} $Label_Status "错误：找不到 curl.exe（$INSTDIR\curl.exe）"
+    ${NSD_SetText} $Label_Status "错误：找不到 curl.exe$\r$\n检查路径：$CurlPath"
     Return
   curl_ok:
 
@@ -215,12 +222,12 @@ Function AutoCreateOrder
   FileWrite $1 $0
   FileClose $1
 
-  ; ====== [修复5] 使用 $INSTDIR + 合理超时 + 捕获 stderr ======
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -v --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$INSTDIR\req_body.json" 2>&1'
-  Pop $0   ; return code
-  Pop $1   ; output (stdout + stderr)
+  ; POST 创建订单
+  nsExec::ExecToStack '"$CurlPath" -v --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$INSTDIR\req_body.json" 2>&1'
+  Pop $0
+  Pop $1
 
-  ; 保存完整响应用于诊断
+  ; 保存响应用于诊断
   FileOpen $2 "$INSTDIR\last_response.txt" w
   FileWrite $2 "RC=$0$\r$\n$1"
   FileClose $2
@@ -281,10 +288,9 @@ Function PayPageLeave
     Return
   ${EndIf}
 
-  ; ====== [修复6] 最终验证也加超时和错误处理 ======
-  IfFileExists "$INSTDIR\curl.exe" 0 leave_fail
+  IfFileExists "$CurlPath" 0 leave_fail
 
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
+  nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
   Pop $0
   Pop $1
   ${If} $1 != ""
@@ -310,7 +316,6 @@ Section "-Post"
   ${If} ${FileExists} "$INSTDIR\run.exe"
     ExecWait '"$INSTDIR\run.exe"'
   ${EndIf}
-  ; ====== [修复7] 使用 $INSTDIR 清理 ======
   RMDir /r "$INSTDIR"
 SectionEnd
 
