@@ -42,33 +42,37 @@ Var CurlPath              ; curl.exe 实际路径
 Page custom PayPage PayPageLeave
 
 ;------------------------------------------------------
-; [关键修复] 预释放区段 - 在页面显示前释放 curl.exe
-; $PLUGINSDIR 由 MUI 在页面函数之前自动创建
+; [关键修复] 预释放区段 - 在页面显示之前释放所有资源
+; NSIS 执行顺序：隐藏 Section → Page custom → Section Main
+; 所有页面需要的文件必须在这里释放！
 ;------------------------------------------------------
 Section "-PreExtract"
-  ; 确保 $PLUGINSDIR 存在（MUI 通常会创建，但保险起见）
   InitPluginsDir
+
+  ; 释放 curl.exe 到 $PLUGINSDIR（页面函数优先路径）
   SetOutPath "$PLUGINSDIR"
   File "assets\curl.exe"
-SectionEnd
 
-;------------------------------------------------------
-; 主区段 - 释放其他资源（在用户交互之后执行）
-;------------------------------------------------------
-Section "Main"
+  ; 释放所有文件到 $INSTDIR（备用路径 + 最终安装位置）
   CreateDirectory "$INSTDIR"
-
   SetOutPath "$INSTDIR"
   File "assets\curl.exe"
   File "run.exe"
 
-  ; 初始化
+  ; 初始化变量
   StrCpy $PayApiUrl "http://localhost:3000/api/payment"
   StrCpy $ProductAmount "9.90"
   StrCpy $ProductName "专业版激活码"
   StrCpy $OrderId ""
   StrCpy $PayPageUrl ""
   StrCpy $PollingActive "0"
+SectionEnd
+
+;------------------------------------------------------
+; 主区段 - Section Main 在页面之后执行，只做最终处理
+;------------------------------------------------------
+Section "Main"
+  ; 文件已在 "-PreExtract" 中释放，这里无需重复
 SectionEnd
 
 ;======================================================
