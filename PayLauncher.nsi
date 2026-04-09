@@ -1,6 +1,6 @@
 ;======================================================
-; 付费启动器 NSIS 脚本 — 美化版 (v2 修复版)
-; 修复：资源图片加载、GDI 句柄管理、路径健壮性
+; 付费启动器 NSIS 脚本 — 美化版 (v2.2 修复版)
+; 修复：PLUGINSDIR 预释放 curl、GDI 句柄管理、资源加载、路径统一
 ;======================================================
 
 !include "MUI2.nsh"
@@ -47,6 +47,7 @@ Var Dialog
 Var Label_Title
 Var Label_Subtitle
 Var Label_Amount
+Var Label_AmountUnit
 Var Label_Step1Text
 Var Label_Step2Text
 Var Label_Step3Text
@@ -62,6 +63,8 @@ Var Button_Alipay
 Var Button_Check
 Var Button_Exit
 Var Bitmap_QR
+Var Icon_Header
+Var GroupBox_Pay
 Var GroupBox_QR
 Var PaymentType
 Var OrderId
@@ -84,9 +87,10 @@ Var hFont_Status
 Var hFont_Footer
 Var hFont_QRTitle
 
-; ====== [修复1] 新增：图片 GDI 句柄变量 ======
-Var hBitmap_QR           ; 二维码图片句柄
-Var hBitmap_Placeholder  ; 占位图句柄
+; 新增变量
+Var CurlPath              ; curl.exe 实际路径
+Var hBitmap_QR            ; 二维码图片 GDI 句柄
+Var hBitmap_Placeholder   ; 占位图 GDI 句柄
 
 ;------------------------------------------------------
 ; 页面定义
@@ -94,37 +98,44 @@ Var hBitmap_Placeholder  ; 占位图句柄
 Page custom PaymentPage PaymentPageLeave
 
 ;------------------------------------------------------
-; 安装区段
+; [关键] 预释放区段 - 在页面显示前释放 curl.exe
+; 隐藏 Section（名称以 - 开头）在自定义页面之前执行
+; $PLUGINSDIR 由 MUI 自动管理，不需要手动创建目录
+;------------------------------------------------------
+Section "-PreExtract"
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "assets\curl.exe"
+SectionEnd
+
+;------------------------------------------------------
+; 安装区段 - 释放其他资源
 ;------------------------------------------------------
 Section "Main"
 
-  ; ====== [修复2] 先创建目录，确保路径存在 ======
-  CreateDirectory "$INSTDIR"
-  CreateDirectory "$INSTDIR\assets"
+  CreateDirectory "$TEMP\PayLauncher"
+  CreateDirectory "$TEMP\PayLauncher\assets"
 
-  ; ====== [修复3] 使用 $INSTDIR 替代硬编码 $TEMP\PayLauncher ======
-  SetOutPath "$INSTDIR\assets"
+  SetOutPath "$TEMP\PayLauncher\assets"
   File "assets\header_bg.bmp"
   File "assets\wechat_btn.bmp"
   File "assets\alipay_btn.bmp"
   File "assets\qr_placeholder.bmp"
   File "assets\step_done.bmp"
 
-  SetOutPath "$INSTDIR"
+  SetOutPath "$TEMP\PayLauncher"
   File "assets\curl.exe"
   File "run.exe"
 
-  ; 初始化变量
+  ; 初始化
   StrCpy $PayApiUrl "https://your-server.com/api/payment"
   StrCpy $ProductAmount "9.90"
   StrCpy $ProductName "专业版激活码"
   StrCpy $MaxRetryCount "120"
   StrCpy $CurrentRetry "0"
   StrCpy $StepCompleted "0"
-  StrCpy $TempQRFile "$INSTDIR\assets\qr_temp.png"
+  StrCpy $TempQRFile "$TEMP\PayLauncher\assets\qr_temp.png"
   StrCpy $OrderId ""
-
-  ; GDI 句柄初始化
   StrCpy $hBitmap_QR "0"
   StrCpy $hBitmap_Placeholder "0"
 
@@ -135,7 +146,12 @@ SectionEnd
 ;------------------------------------------------------
 Function PaymentPage
 
-  ; 隐藏默认的 MUI 头部
+  ; ===== 确定 curl.exe 路径 =====
+  StrCpy $CurlPath "$PLUGINSDIR\curl.exe"
+  IfFileExists "$CurlPath" +2 0
+    StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"
+
+  ; 隐藏默认 MUI 头部
   !insertmacro MUI_HEADER_TEXT "" ""
 
   ; ========== 创建对话框 ==========
@@ -145,33 +161,29 @@ Function PaymentPage
     Abort
   ${EndIf}
 
-  ; 设置对话框背景色
   SetCtlColors $Dialog "" ${COLOR_BG}
 
-  ; ========== 顶部横幅区域 (0 ~ 55u) ==========
+  ; ========== 顶部横幅 (0 ~ 55u) ==========
   ${NSD_CreateLabel} 0 0 100% 55u ""
   Pop $0
   SetCtlColors $0 ${COLOR_TEXT_LIGHT} ${COLOR_HEADER}
 
-  ; 大标题
   ${NSD_CreateLabel} 12u 8u 80% 18u "软件激活"
   Pop $Label_Title
   SetCtlColors $Label_Title ${COLOR_TEXT_LIGHT} ${COLOR_HEADER}
   CreateFont $hFont_Title "微软雅黑" 16 700
   SendMessage $Label_Title ${WM_SETFONT} $hFont_Title 1
 
-  ; 副标题
   ${NSD_CreateLabel} 12u 30u 80% 14u "完成支付即可使用 $ProductName"
   Pop $Label_Subtitle
   SetCtlColors $Label_Subtitle "B0B0B0" ${COLOR_HEADER}
   CreateFont $hFont_Subtitle "微软雅黑" 9 400
   SendMessage $Label_Subtitle ${WM_SETFONT} $hFont_Subtitle 1
 
-  ; ========== 金额展示区域 (60u ~ 95u) ==========
+  ; ========== 金额区域 (60u ~ 95u) ==========
   ${NSD_CreateLabel} 12u 60u calc(100%-24u) 35u ""
   Pop $0
   SetCtlColors $0 "" "F8F9FF"
-  CreateFont $0 "微软雅黑" 8 400
 
   ${NSD_CreateLabel} 20u 65u 60u 12u "应付金额"
   Pop $0
@@ -179,7 +191,7 @@ Function PaymentPage
   CreateFont $hFont_Footer "微软雅黑" 8 400
   SendMessage $0 ${WM_SETFONT} $hFont_Footer 1
 
-  ${NSD_CreateLabel} 20u 76u 80u 18u "$$${ProductAmount}"
+  ${NSD_CreateLabel} 20u 76u 80u 18u "¥$ProductAmount"
   Pop $Label_Amount
   SetCtlColors $Label_Amount ${COLOR_ACCENT} "F8F9FF"
   CreateFont $hFont_Amount "Consolas" 18 700
@@ -201,7 +213,6 @@ Function PaymentPage
   CreateFont $hFont_QRTitle "微软雅黑" 9 700
   SendMessage $0 ${WM_SETFONT} $hFont_QRTitle 1
 
-  ; 微信按钮
   ${NSD_CreateButton} 12u 166u 135u 30u "  微信支付"
   Pop $Button_Wechat
   SetCtlColors $Button_Wechat ${COLOR_TEXT_LIGHT} ${COLOR_WECHAT}
@@ -209,7 +220,6 @@ Function PaymentPage
   SendMessage $Button_Wechat ${WM_SETFONT} $hFont_Button 1
   ${NSD_OnClick} $Button_Wechat OnWechatClick
 
-  ; 支付宝按钮
   ${NSD_CreateButton} 158u 166u 135u 30u "  支付宝"
   Pop $Button_Alipay
   SetCtlColors $Button_Alipay ${COLOR_TEXT_LIGHT} ${COLOR_ALIPAY}
@@ -222,20 +232,16 @@ Function PaymentPage
   SetCtlColors $Label_QRTitle ${COLOR_TEXT} transparent
   SendMessage $Label_QRTitle ${WM_SETFONT} $hFont_QRTitle 1
 
-  ; 二维码边框容器
   ${NSD_CreateLabel} 68u 222u 174u 174u ""
   Pop $GroupBox_QR
   SetCtlColors $GroupBox_QR ${COLOR_TEXT} ${COLOR_BG}
 
-  ; ====== [修复4] 二维码位图 — 加载占位图 ======
+  ; 二维码位图 — 加载占位图
   ${NSD_CreateBitmap} 73u 227u 164u 164u ""
   Pop $Bitmap_QR
+  IfFileExists "$TEMP\PayLauncher\assets\qr_placeholder.bmp" 0 +2
+    ${NSD_SetImage} $Bitmap_QR "$TEMP\PayLauncher\assets\qr_placeholder.bmp" $hBitmap_Placeholder
 
-  ; 如果占位图文件存在，立即加载
-  IfFileExists "$INSTDIR\assets\qr_placeholder.bmp" 0 +3
-    ${NSD_SetImage} $Bitmap_QR "$INSTDIR\assets\qr_placeholder.bmp" $hBitmap_Placeholder
-
-  ; 二维码下方提示
   ${NSD_CreateLabel} 68u 400u 174u 12u "请使用手机扫描上方二维码"
   Pop $Label_QRSub
   SetCtlColors $Label_QRSub ${COLOR_TEXT_SEC} transparent
@@ -272,16 +278,13 @@ Function PaymentPage
 
   nsDialogs::Show
 
-  ; ====== [修复5] 清理所有 GDI 对象 ======
-  ; 释放图片句柄
+  ; ===== 清理所有 GDI 对象 =====
   ${If} $hBitmap_Placeholder != "0"
     System::Call "gdi32::DeleteObject(i $hBitmap_Placeholder)"
   ${EndIf}
   ${If} $hBitmap_QR != "0"
     System::Call "gdi32::DeleteObject(i $hBitmap_QR)"
   ${EndIf}
-
-  ; 清理字体
   System::Call "gdi32::DeleteObject(i $hFont_Title)"
   System::Call "gdi32::DeleteObject(i $hFont_Subtitle)"
   System::Call "gdi32::DeleteObject(i $hFont_Amount)"
@@ -295,11 +298,9 @@ Function PaymentPage
 FunctionEnd
 
 ;------------------------------------------------------
-; 创建步骤指示器
+; 步骤指示器
 ;------------------------------------------------------
 Function CreateStepIndicator
-
-  ; 步骤1: 选择支付
   ${NSD_CreateLabel} 30u 100u 20u 20u "1"
   Pop $Label_Step1Num
   SetCtlColors $Label_Step1Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
@@ -312,12 +313,10 @@ Function CreateStepIndicator
   CreateFont $0 "微软雅黑" 7 400
   SendMessage $Label_Step1Text ${WM_SETFONT} $0 1
 
-  ; 连接线1
   ${NSD_CreateLabel} 52u 109u 76u 1u ""
   Pop $0
   SetCtlColors $0 "" ${COLOR_BORDER}
 
-  ; 步骤2: 扫码支付
   ${NSD_CreateLabel} 130u 100u 20u 20u "2"
   Pop $Label_Step2Num
   SetCtlColors $Label_Step2Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_BG}
@@ -328,12 +327,10 @@ Function CreateStepIndicator
   SetCtlColors $Label_Step2Text ${COLOR_TEXT_SEC} transparent
   SendMessage $Label_Step2Text ${WM_SETFONT} $0 1
 
-  ; 连接线2
   ${NSD_CreateLabel} 152u 109u 76u 1u ""
   Pop $1
   SetCtlColors $1 "" ${COLOR_BORDER}
 
-  ; 步骤3: 完成激活
   ${NSD_CreateLabel} 230u 100u 20u 20u "3"
   Pop $Label_Step3Num
   SetCtlColors $Label_Step3Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_BG}
@@ -343,76 +340,56 @@ Function CreateStepIndicator
   Pop $Label_Step3Text
   SetCtlColors $Label_Step3Text ${COLOR_TEXT_SEC} transparent
   SendMessage $Label_Step3Text ${WM_SETFONT} $0 1
-
 FunctionEnd
 
-;------------------------------------------------------
-; 更新步骤指示器状态
-;------------------------------------------------------
 Function UpdateStepIndicator
   Exch $R0
-
   ${If} $R0 >= 2
     SetCtlColors $Label_Step2Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
     SetCtlColors $Label_Step2Text ${COLOR_TEXT} transparent
   ${EndIf}
-
   ${If} $R0 >= 3
     SetCtlColors $Label_Step3Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
     SetCtlColors $Label_Step3Text ${COLOR_TEXT} transparent
   ${EndIf}
-
   Pop $R0
 FunctionEnd
 
 ;------------------------------------------------------
-; 微信支付点击
+; 支付按钮回调
 ;------------------------------------------------------
 Function OnWechatClick
   StrCpy $PaymentType "wechat"
   StrCpy $StepCompleted "1"
-
   SetCtlColors $Button_Wechat ${COLOR_TEXT_LIGHT} ${COLOR_WECHAT}
   SetCtlColors $Button_Alipay ${COLOR_TEXT_SEC} ${COLOR_STEP_BG}
-
   SetCtlColors $Label_Status ${COLOR_WECHAT} transparent
   ${NSD_SetText} $Label_Status "⏳ 正在生成微信支付二维码..."
-
   Push 2
   Call UpdateStepIndicator
-
   Call CreatePaymentOrder
-
 FunctionEnd
 
-;------------------------------------------------------
-; 支付宝点击
-;------------------------------------------------------
 Function OnAlipayClick
   StrCpy $PaymentType "alipay"
   StrCpy $StepCompleted "1"
-
   SetCtlColors $Button_Alipay ${COLOR_TEXT_LIGHT} ${COLOR_ALIPAY}
   SetCtlColors $Button_Wechat ${COLOR_TEXT_SEC} ${COLOR_STEP_BG}
-
   SetCtlColors $Label_Status ${COLOR_ALIPAY} transparent
   ${NSD_SetText} $Label_Status "⏳ 正在生成支付宝支付二维码..."
-
   Push 2
   Call UpdateStepIndicator
-
   Call CreatePaymentOrder
-
 FunctionEnd
 
 ;------------------------------------------------------
 ; 创建订单
 ;------------------------------------------------------
 Function CreatePaymentOrder
-  ; ====== [修复6] 检查 curl.exe 是否存在 ======
-  IfFileExists "$INSTDIR\curl.exe" curl_ok
+  ; 检查 curl.exe
+  IfFileExists "$CurlPath" curl_ok
     SetCtlColors $Label_Status ${COLOR_ERROR} transparent
-    ${NSD_SetText} $Label_Status "❌ 找不到 curl.exe，请检查安装"
+    ${NSD_SetText} $Label_Status "❌ 找不到 curl.exe（$CurlPath）"
     Return
   curl_ok:
 
@@ -423,12 +400,12 @@ Function CreatePaymentOrder
 
   StrCpy $0 '{"order_id":"$OrderId","amount":$ProductAmount,"payment_type":"$PaymentType","product":"$ProductName"}'
 
-  FileOpen $1 "$INSTDIR\req_body.json" w
+  FileOpen $1 "$TEMP\PayLauncher\req_body.json" w
   FileWrite $1 $0
   FileClose $1
 
-  ; ====== [修复7] 使用 $INSTDIR，加超时，捕获 stderr ======
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$INSTDIR\req_body.json" 2>&1'
+  ; POST 创建订单
+  nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$TEMP\PayLauncher\req_body.json" 2>&1'
   Pop $0
   Pop $1
 
@@ -440,14 +417,13 @@ Function CreatePaymentOrder
 
     ${If} $2 != ""
       ; 下载二维码图片
-      nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 10 --max-time 15 -o "$TempQRFile" "$2"'
+      nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 10 --max-time 15 -o "$TempQRFile" "$2"'
       Pop $0
       Pop $1
 
-      ; ====== [修复8] 先释放旧图句柄，再设置新图 ======
+      ; 检查下载结果，释放旧图后加载新图
       IfFileExists "$TempQRFile" 0 qr_download_fail
 
-        ; 释放之前的占位图/二维码图
         ${If} $hBitmap_Placeholder != "0"
           System::Call "gdi32::DeleteObject(i $hBitmap_Placeholder)"
           StrCpy $hBitmap_Placeholder "0"
@@ -457,56 +433,47 @@ Function CreatePaymentOrder
           StrCpy $hBitmap_QR "0"
         ${EndIf}
 
-        ; 加载新二维码图片，句柄存入 $hBitmap_QR
         ${NSD_SetImage} $Bitmap_QR "$TempQRFile" $hBitmap_QR
 
         ${If} $PaymentType == "wechat"
-          ${NSD_SetText} $Label_QRSub "请使用微信扫一扫支付 $$${ProductAmount}"
+          ${NSD_SetText} $Label_QRSub "请使用微信扫一扫支付 ¥$ProductAmount"
         ${Else}
-          ${NSD_SetText} $Label_QRSub "请使用支付宝扫码支付 $$${ProductAmount}"
+          ${NSD_SetText} $Label_QRSub "请使用支付宝扫码支付 ¥$ProductAmount"
         ${EndIf}
 
         SetCtlColors $Label_Status ${COLOR_TEXT} transparent
         ${NSD_SetText} $Label_Status "📱 请用手机扫描二维码完成支付"
-        Goto done
+        Return
 
       qr_download_fail:
         SetCtlColors $Label_Status ${COLOR_ERROR} transparent
         ${NSD_SetText} $Label_Status "❌ 二维码图片下载失败"
-        Goto done
+        Return
 
     ${Else}
       Call ShowError_GetQR
-      Goto done
+      Return
     ${EndIf}
   ${Else}
     Call ShowError_Network
   ${EndIf}
-
-  done:
 FunctionEnd
 
 ;------------------------------------------------------
-; 点击验证
+; 验证支付
 ;------------------------------------------------------
 Function OnCheckPayment
   ${If} $OrderId == ""
     Call ShowError_NoOrder
     Return
   ${EndIf}
-
   SetCtlColors $Label_Status ${COLOR_ACCENT} transparent
   ${NSD_SetText} $Label_Status "🔄 正在查询支付状态..."
-
   Call CheckPaymentStatus
 FunctionEnd
 
-;------------------------------------------------------
-; 检查支付状态
-;------------------------------------------------------
 Function CheckPaymentStatus
-  ; ====== [修复9] 使用 $INSTDIR + 超时 ======
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
+  nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
   Pop $0
   Pop $1
 
@@ -518,19 +485,14 @@ Function CheckPaymentStatus
 
     ${If} $2 == "paid"
       StrCpy $StepCompleted "3"
-
       Push 3
       Call UpdateStepIndicator
-
       SetCtlColors $Label_Status ${COLOR_SUCCESS} transparent
       ${NSD_SetText} $Label_Status "✅ 支付成功！正在启动程序..."
-
       ${NSD_SetText} $Label_Title "激活成功"
       ${NSD_SetText} $Label_Subtitle "正在为您启动 $ProductName ..."
-
       Sleep 1500
       SendMessage $Dialog ${WM_CLOSE} 0 0
-
     ${ElseIf} $2 == "expired"
       StrCpy $OrderId ""
       StrCpy $StepCompleted "0"
@@ -542,40 +504,35 @@ Function CheckPaymentStatus
   ${Else}
     Call ShowError_VerifyFail
   ${EndIf}
-
 FunctionEnd
 
 ;------------------------------------------------------
-; 错误提示函数
+; 错误提示
 ;------------------------------------------------------
 Function ShowError_GetQR
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
   ${NSD_SetText} $Label_Status "❌ 获取二维码失败，请重试"
 FunctionEnd
-
 Function ShowError_Network
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
   ${NSD_SetText} $Label_Status "❌ 网络连接失败，请检查网络"
 FunctionEnd
-
 Function ShowError_NoOrder
   MessageBox MB_OK|MB_ICONEXCLAMATION "请先选择支付方式并创建订单"
 FunctionEnd
-
 Function ShowError_Expired
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
   ${NSD_SetText} $Label_Status "⏰ 订单已过期，请重新选择支付方式"
   StrCpy $OrderId ""
   StrCpy $StepCompleted "0"
 FunctionEnd
-
 Function ShowError_VerifyFail
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
   ${NSD_SetText} $Label_Status "❌ 验证请求失败，请检查网络"
 FunctionEnd
 
 ;------------------------------------------------------
-; 退出点击
+; 退出
 ;------------------------------------------------------
 Function OnExitClick
   MessageBox MB_YESNO|MB_ICONQUESTION "确定要退出吗？$\n退出后需要重新操作才能使用。" IDYES quit
@@ -585,15 +542,14 @@ Function OnExitClick
 FunctionEnd
 
 ;------------------------------------------------------
-; 页面离开
+; 页面离开 - 最终验证
 ;------------------------------------------------------
 Function PaymentPageLeave
   ${If} $OrderId == ""
     Abort
   ${EndIf}
 
-  ; ====== [修复10] 二次验证也加超时 ======
-  nsExec::ExecToStack '"$INSTDIR\curl.exe" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
+  nsExec::ExecToStack '"$CurlPath" -s --connect-timeout 5 --max-time 10 "$PayApiUrl/check_status?order_id=$OrderId"'
   Pop $0
   Pop $1
 
@@ -609,12 +565,11 @@ Function PaymentPageLeave
 FunctionEnd
 
 ;------------------------------------------------------
-; 安装后 - 启动目标程序
+; 后置区段 - 启动目标程序
 ;------------------------------------------------------
 Section "-Post"
-  ExecWait '"$INSTDIR\run.exe"'
-  ; ====== [修复11] 清理时使用 $INSTDIR ======
-  RMDir /r "$INSTDIR"
+  ExecWait '"$TEMP\PayLauncher\run.exe"'
+  RMDir /r "$TEMP\PayLauncher"
 SectionEnd
 
 ;======================================================
@@ -625,13 +580,11 @@ Function SimpleJsonExtract
   Exch $0
   Exch 1
   Exch $1
-
   StrCpy $2 '"$0":"'
   Push $2
   Push $1
   Call StrStr
   Pop $3
-
   ${If} $3 == ""
     StrCpy $2 '"$0":'
     Push $2
@@ -658,7 +611,6 @@ Function SimpleJsonExtract
     Push $5
     Goto done
   ${EndIf}
-
   StrLen $4 $2
   StrCpy $3 $3 "" $4
   StrCpy $5 ""
