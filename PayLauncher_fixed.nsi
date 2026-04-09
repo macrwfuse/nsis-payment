@@ -24,11 +24,19 @@ ShowInstDetails nevershow
 
 !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
 
-; Windows 常量
+; Windows 常量（用 !ifndef 防止重复定义）
+!ifndef BS_BITMAP
 !define BS_BITMAP      0x80
+!endif
+!ifndef BM_SETIMAGE
 !define BM_SETIMAGE    0xF7
+!endif
+!ifndef IMAGE_BITMAP
 !define IMAGE_BITMAP    0
+!endif
+!ifndef GWL_STYLE
 !define GWL_STYLE      -16
+!endif
 
 ;------------------------------------------------------
 ; 颜色定义
