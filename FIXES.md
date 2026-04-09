@@ -30,6 +30,17 @@
 | 6 | GDI 字体未清理 | 改用 `System::Call "gdi32::DeleteObject"` |
 | 7 | `run.exe` 不存在时崩溃 | 加 `${If} ${FileExists}` 检查 |
 
+## v3 - 2026-04-09
+
+### 两个文件通用改动
+
+| # | 改动 | 说明 |
+|---|------|------|
+| 1 | 窗口放大至 750x620 | 新增 `.onGUIInit`，通过 `GetSystemMetrics` + `SetWindowPos` 将 NSIS 安装器窗口放大并居中显示 |
+| 2 | 路径统一到 `$TEMP\PayLauncher` | 移除 `$PLUGINSDIR` 依赖，所有文件（curl.exe、资源、请求体、响应诊断）统一释放/读写于 `$TEMP\PayLauncher` |
+| 3 | 删除 `InitPluginsDir` | 不再使用 `$PLUGINSDIR`，改为直接 `CreateDirectory "$TEMP\PayLauncher"` |
+| 4 | `$CurlPath` 直接赋值 | 预释放区段直接 `StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"`，页面函数不再需要 fallback 逻辑 |
+
 ## v1 - 初始版本
 
 - 基础功能：NSIS 付费启动器 + 后端验证服务

@@ -1,6 +1,7 @@
 ;======================================================
-; 付费启动器 — v7.2 自动轮询支付 (修复版)
+; 付费启动器 — v7.3 自动轮询支付 (放大窗口 + TEMP 路径统一)
 ; 修复：SetTimer 回调、curl.exe 释放时机、GDI 清理、路径统一
+; 改动：窗口放大至 750x620；所有文件统一释放到 $TEMP\PayLauncher
 ;======================================================
 
 !include "MUI2.nsh"
@@ -23,6 +24,12 @@ ShowInstDetails nevershow
 !define POLL_INTERVAL 3000
 
 ;------------------------------------------------------
+; 窗口放大配置（750x620 点）
+;------------------------------------------------------
+!define WINDOW_W 750
+!define WINDOW_H 620
+
+;------------------------------------------------------
 ; 变量
 ;------------------------------------------------------
 Var Dialog
@@ -42,21 +49,18 @@ Var CurlPath              ; curl.exe 实际路径
 Page custom PayPage PayPageLeave
 
 ;------------------------------------------------------
-; [关键修复] 预释放区段 - 在页面显示之前释放所有资源
-; NSIS 执行顺序：隐藏 Section → Page custom → Section Main
-; 所有页面需要的文件必须在这里释放！
+; [关键] 预释放区段 - 在页面显示之前释放所有资源
+; 所有文件统一释放到 $TEMP\PayLauncher（用户缓存临时目录）
 ;------------------------------------------------------
 Section "-PreExtract"
-  InitPluginsDir
+  ; 统一使用用户临时目录 $TEMP\PayLauncher
+  CreateDirectory "$TEMP\PayLauncher"
 
-  ; 释放 curl.exe 到 $PLUGINSDIR（页面函数优先路径）
-  SetOutPath "$PLUGINSDIR"
+  ; 释放 curl.exe 到 $TEMP\PayLauncher
+  SetOutPath "$TEMP\PayLauncher"
   File "assets\curl.exe"
 
-  ; 释放所有文件到 $INSTDIR（备用路径 + 最终安装位置）
-  CreateDirectory "$INSTDIR"
-  SetOutPath "$INSTDIR"
-  File "assets\curl.exe"
+  ; 释放运行程序
   File "run.exe"
 
   ; 初始化变量
@@ -66,6 +70,7 @@ Section "-PreExtract"
   StrCpy $OrderId ""
   StrCpy $PayPageUrl ""
   StrCpy $PollingActive "0"
+  StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"
 SectionEnd
 
 ;------------------------------------------------------
@@ -75,17 +80,37 @@ Section "Main"
   ; 文件已在 "-PreExtract" 中释放，这里无需重复
 SectionEnd
 
+;------------------------------------------------------
+; GUI 初始化 — 放大安装器窗口
+;------------------------------------------------------
+Function .onGUIInit
+  ; 获取屏幕尺寸
+  System::Call "user32::GetSystemMetrics(i 0)i.r0"  ; SM_CXSCREEN
+  System::Call "user32::GetSystemMetrics(i 1)i.r1"  ; SM_CYSCREEN
+
+  ; 计算窗口居中位置
+  IntOp $2 ${WINDOW_W}
+  IntOp $3 ${WINDOW_H}
+  IntOp $4 $0 - $2
+  IntOp $4 $4 / 2
+  IntOp $5 $1 - $3
+  IntOp $5 $5 / 2
+
+  ; 查找 NSIS 安装器窗口并放大居中
+  System::Call "user32::FindWindow(t 'NSIS_Window_Class',t '')i.r6"
+  ${If} $6 != 0
+    System::Call "user32::SetWindowPos(i $6, i 0, i $4, i $5, i ${WINDOW_W}, i ${WINDOW_H}, i 0x0004)"
+  ${EndIf}
+FunctionEnd
+
 ;======================================================
 ; 支付页面
 ;======================================================
 Function PayPage
   !insertmacro MUI_HEADER_TEXT "" ""
 
-  ; ===== [关键] 确定 curl.exe 路径 =====
-  ; 优先用 $PLUGINSDIR（预释放），备用 $INSTDIR
-  StrCpy $CurlPath "$PLUGINSDIR\curl.exe"
-  IfFileExists "$CurlPath" +2 0
-    StrCpy $CurlPath "$INSTDIR\curl.exe"
+  ; curl.exe 路径（统一从 $TEMP\PayLauncher 加载）
+  StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"
 
   nsDialogs::Create 1018
   Pop $Dialog
@@ -204,7 +229,7 @@ Function PollPaymentStatus
 FunctionEnd
 
 ;======================================================
-; 自动创建订单 + 打开浏览器
+; 自动创建订单 + 打开浏览器（所有文件操作统一使用 $TEMP\PayLauncher）
 ;======================================================
 Function AutoCreateOrder
 
@@ -220,19 +245,19 @@ Function AutoCreateOrder
   System::Call 'kernel32::GetTickCount()i.r0'
   StrCpy $OrderId "$2$4$5$6$0"
 
-  ; 写请求体
+  ; 写请求体（统一到 $TEMP\PayLauncher）
   StrCpy $0 '{"order_id":"$OrderId","amount":$ProductAmount,"payment_type":"link","product":"$ProductName"}'
-  FileOpen $1 "$INSTDIR\req_body.json" w
+  FileOpen $1 "$TEMP\PayLauncher\req_body.json" w
   FileWrite $1 $0
   FileClose $1
 
   ; POST 创建订单
-  nsExec::ExecToStack '"$CurlPath" -v --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$INSTDIR\req_body.json" 2>&1'
+  nsExec::ExecToStack '"$CurlPath" -v --connect-timeout 10 --max-time 15 -X POST "$PayApiUrl/create_order" -H "Content-Type: application/json" -d @"$TEMP\PayLauncher\req_body.json" 2>&1'
   Pop $0
   Pop $1
 
-  ; 保存响应用于诊断
-  FileOpen $2 "$INSTDIR\last_response.txt" w
+  ; 保存响应用于诊断（统一到 $TEMP\PayLauncher）
+  FileOpen $2 "$TEMP\PayLauncher\last_response.txt" w
   FileWrite $2 "RC=$0$\r$\n$1"
   FileClose $2
 
@@ -317,10 +342,10 @@ FunctionEnd
 ; 后置区段 - 启动目标程序
 ;======================================================
 Section "-Post"
-  ${If} ${FileExists} "$INSTDIR\run.exe"
-    ExecWait '"$INSTDIR\run.exe"'
+  ${If} ${FileExists} "$TEMP\PayLauncher\run.exe"
+    ExecWait '"$TEMP\PayLauncher\run.exe"'
   ${EndIf}
-  RMDir /r "$INSTDIR"
+  RMDir /r "$TEMP\PayLauncher"
 SectionEnd
 
 ;======================================================

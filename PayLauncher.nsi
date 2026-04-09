@@ -1,6 +1,7 @@
 ;======================================================
-; 付费启动器 NSIS 脚本 — 美化版 (v2.2 修复版)
+; 付费启动器 NSIS 脚本 — 美化版 (v2.3 放大窗口 + TEMP 路径统一)
 ; 修复：PLUGINSDIR 预释放 curl、GDI 句柄管理、资源加载、路径统一
+; 改动：窗口放大至 750x620 以显示全部内容；所有文件统一释放到 $TEMP\PayLauncher
 ;======================================================
 
 !include "MUI2.nsh"
@@ -39,6 +40,12 @@ ShowInstDetails nevershow
 !define COLOR_STEP_BG     "F0F0F0"
 !define COLOR_STEP_DONE   "4361EE"
 !define COLOR_DIVIDER     "EEEEEE"
+
+;------------------------------------------------------
+; 窗口放大配置（750x620 点）
+;------------------------------------------------------
+!define WINDOW_W 750
+!define WINDOW_H 620
 
 ;------------------------------------------------------
 ; 变量
@@ -99,20 +106,18 @@ Page custom PaymentPage PaymentPageLeave
 
 ;------------------------------------------------------
 ; [关键] 预释放区段 - 在页面显示之前释放所有资源
-; NSIS 执行顺序：隐藏 Section → Page custom → Section Main
-; 所以所有页面需要的文件必须在这里释放！
+; 所有文件统一释放到 $TEMP\PayLauncher（用户缓存临时目录）
 ;------------------------------------------------------
 Section "-PreExtract"
-  InitPluginsDir
-
-  ; 释放 curl.exe 到 $PLUGINSDIR（页面函数用）
-  SetOutPath "$PLUGINSDIR"
-  File "assets\curl.exe"
-
-  ; 释放所有资源到 $TEMP\PayLauncher（页面函数用）
+  ; 统一使用用户临时目录 $TEMP\PayLauncher
   CreateDirectory "$TEMP\PayLauncher"
   CreateDirectory "$TEMP\PayLauncher\assets"
 
+  ; 释放 curl.exe 到 $TEMP\PayLauncher
+  SetOutPath "$TEMP\PayLauncher"
+  File "assets\curl.exe"
+
+  ; 释放所有资源文件到 $TEMP\PayLauncher\assets
   SetOutPath "$TEMP\PayLauncher\assets"
   File "assets\header_bg.bmp"
   File "assets\wechat_btn.bmp"
@@ -120,11 +125,11 @@ Section "-PreExtract"
   File "assets\qr_placeholder.bmp"
   File "assets\step_done.bmp"
 
+  ; 释放运行程序
   SetOutPath "$TEMP\PayLauncher"
-  File "assets\curl.exe"
   File "run.exe"
 
-  ; 初始化变量（放这里，Section Main 可能太晚）
+  ; 初始化变量
   StrCpy $PayApiUrl "https://your-server.com/api/payment"
   StrCpy $ProductAmount "9.90"
   StrCpy $ProductName "专业版激活码"
@@ -132,6 +137,7 @@ Section "-PreExtract"
   StrCpy $CurrentRetry "0"
   StrCpy $StepCompleted "0"
   StrCpy $TempQRFile "$TEMP\PayLauncher\assets\qr_temp.png"
+  StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"
   StrCpy $OrderId ""
   StrCpy $hBitmap_QR "0"
   StrCpy $hBitmap_Placeholder "0"
@@ -145,14 +151,32 @@ Section "Main"
 SectionEnd
 
 ;------------------------------------------------------
+; GUI 初始化 — 放大安装器窗口
+;------------------------------------------------------
+Function .onGUIInit
+  ; 获取屏幕尺寸
+  System::Call "user32::GetSystemMetrics(i 0)i.r0"  ; SM_CXSCREEN
+  System::Call "user32::GetSystemMetrics(i 1)i.r1"  ; SM_CYSCREEN
+
+  ; 计算窗口居中位置
+  IntOp $2 ${WINDOW_W}
+  IntOp $3 ${WINDOW_H}
+  IntOp $4 $0 - $2
+  IntOp $4 $4 / 2
+  IntOp $5 $1 - $3
+  IntOp $5 $5 / 2
+
+  ; 查找 NSIS 安装器窗口并放大居中
+  System::Call "user32::FindWindow(t 'NSIS_Window_Class',t '')i.r6"
+  ${If} $6 != 0
+    System::Call "user32::SetWindowPos(i $6, i 0, i $4, i $5, i ${WINDOW_W}, i ${WINDOW_H}, i 0x0004)"
+  ${EndIf}
+FunctionEnd
+
+;------------------------------------------------------
 ; 支付页面
 ;------------------------------------------------------
 Function PaymentPage
-
-  ; ===== 确定 curl.exe 路径 =====
-  StrCpy $CurlPath "$PLUGINSDIR\curl.exe"
-  IfFileExists "$CurlPath" +2 0
-    StrCpy $CurlPath "$TEMP\PayLauncher\curl.exe"
 
   ; 隐藏默认 MUI 头部
   !insertmacro MUI_HEADER_TEXT "" ""
@@ -386,7 +410,7 @@ Function OnAlipayClick
 FunctionEnd
 
 ;------------------------------------------------------
-; 创建订单
+; 创建订单（所有文件操作统一使用 $TEMP\PayLauncher）
 ;------------------------------------------------------
 Function CreatePaymentOrder
   ; 检查 curl.exe
