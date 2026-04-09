@@ -98,7 +98,7 @@ app.post('/api/payment/create_order', async (req, res) => {
         qrUrl = await createDemoOrder(order);
     }
 
-    return res.json({ code: 0, qr_url: qrUrl, order_id });
+    return res.json({ code: 0, qr_url: qrUrl, pay_url: qrUrl, order_id });
   } catch (err) {
     console.error('创建订单失败:', err.message);
     return res.json({ code: -1, msg: '创建订单失败: ' + err.message });
@@ -183,7 +183,85 @@ app.post('/api/payment/alipay_notify', (req, res) => {
   }
 });
 
-// ========== Demo 模式：手动生成支付二维码 ==========
+// ========== Web 支付页面（链接支付模式）==========
+// 手机扫码后打开此页面，页面内显示二维码 + 自动轮询状态
+app.get('/api/payment/pay', (req, res) => {
+  const { order_id } = req.query;
+  const order = orders.get(order_id);
+
+  if (!order) {
+    return res.status(404).send('<html><body style="text-align:center;padding:50px;font-family:sans-serif"><h2>订单不存在</h2><p>请返回安装器重新创建订单</p></body></html>');
+  }
+
+  // 在 demo 模式下，生成模拟二维码（指向 demo_pay）
+  const qrContent = PAYMENT_MODE === 'demo'
+    ? `${req.protocol}://${req.get('host')}/api/payment/demo_pay?order_id=${order_id}`
+    : (order.qr_url || '');
+
+  const payTypeName = order.payment_type === 'wechat' ? '微信支付' : order.payment_type === 'alipay' ? '支付宝' : '扫码支付';
+
+  res.send(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>支付 - ${order.product}</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, "微软雅黑", sans-serif; background:#f5f5f5; display:flex; justify-content:center; align-items:center; min-height:100vh; }
+  .card { background:#fff; border-radius:16px; padding:32px 24px; width:340px; box-shadow:0 4px 24px rgba(0,0,0,0.08); text-align:center; }
+  .title { font-size:18px; font-weight:700; color:#333; margin-bottom:4px; }
+  .product { font-size:13px; color:#999; margin-bottom:20px; }
+  .amount { font-size:32px; font-weight:700; color:#4361EE; margin-bottom:24px; }
+  .amount span { font-size:18px; }
+  .qr-box { background:#fafafa; border:1px solid #eee; border-radius:12px; padding:16px; margin-bottom:20px; display:inline-block; }
+  .qr-box img { width:200px; height:200px; }
+  .hint { font-size:12px; color:#999; margin-bottom:16px; }
+  .status { font-size:13px; color:#4361EE; padding:10px; background:#f0f4ff; border-radius:8px; }
+  .status.success { color:#00A854; background:#f0fff4; }
+  .status.expired { color:#F5222D; background:#fff0f0; }
+  .demo-btn { display:inline-block; margin-top:16px; padding:10px 24px; background:#4361EE; color:#fff; border-radius:8px; text-decoration:none; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="title">软件激活</div>
+  <div class="product">${order.product}</div>
+  <div class="amount"><span>¥</span>${order.amount.toFixed(2)}</div>
+  <div class="qr-box">
+    <img id="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrContent)}" alt="QR Code">
+  </div>
+  <div class="hint">请使用${payTypeName}扫描上方二维码</div>
+  <div class="status" id="status">等待支付...</div>
+  ${PAYMENT_MODE === 'demo' ? '<a class="demo-btn" href="/api/payment/demo_pay?order_id=' + order_id + '">[Demo] 模拟支付成功</a>' : ''}
+</div>
+<script>
+  const orderId = '${order_id}';
+  function check() {
+    fetch('/api/payment/check_status?order_id=' + orderId)
+      .then(r => r.json())
+      .then(d => {
+        const el = document.getElementById('status');
+        if (d.status === 'paid') {
+          el.className = 'status success';
+          el.textContent = '✅ 支付成功！请返回安装器继续';
+        } else if (d.status === 'expired') {
+          el.className = 'status expired';
+          el.textContent = '⏰ 订单已过期，请返回安装器重新创建';
+        }
+      })
+      .catch(() => {});
+  }
+  setInterval(check, 3000);
+  check();
+</script>
+</body>
+</html>
+  `);
+});
+
+// ========== Demo 模式 ==========
 // 用于开发测试，访问 /api/payment/demo_pay?order_id=xxx 手动模拟支付
 
 app.get('/api/payment/demo_pay', (req, res) => {
@@ -214,10 +292,10 @@ app.get('/api/payment/demo_pay', (req, res) => {
  * 方案A-Demo：返回一个指向模拟支付页面的 URL（用作二维码内容）
  */
 async function createDemoOrder(order) {
-  // 返回一个可用的 URL 作为二维码内容（手机扫码后跳转模拟支付页）
-  const url = `http://localhost:${PORT}/api/payment/demo_pay?order_id=${order.id}`;
+  // 返回支付网页 URL（展示二维码 + 自动轮询状态）
+  const url = `http://localhost:${PORT}/api/payment/pay?order_id=${order.id}`;
   console.log(`[Demo] 订单 ${order.id} 创建成功，金额 ¥${order.amount}`);
-  console.log(`[Demo] 模拟支付链接: ${url}`);
+  console.log(`[Demo] 支付页面: ${url}`);
   return url;
 }
 
