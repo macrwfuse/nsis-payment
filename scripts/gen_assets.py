@@ -28,9 +28,9 @@ def create_header_bg():
     img.save(os.path.join(OUT, "header_bg.bmp"), "BMP")
     print("✓ header_bg.bmp")
 
-def create_btn(text, color, filename):
-    """创建彩色按钮 BMP"""
-    w, h = 135, 30
+def create_btn(text, color, filename, w=130, h=26):
+    """创建彩色按钮 BMP — 匹配 nsDialogs 按钮尺寸"""
+    img = Image.new("RGB", (w, h), color)
     img = Image.new("RGB", (w, h), color)
     draw = ImageDraw.Draw(img)
     # 底部深色条（立体感）
@@ -38,7 +38,7 @@ def create_btn(text, color, filename):
     draw.rectangle([(0, h-2), (w, h)], fill=darker)
     # 文字
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
     except:
         font = ImageFont.load_default()
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -97,8 +97,8 @@ def create_step_done():
 
 if __name__ == "__main__":
     create_header_bg()
-    create_btn("  WeChat Pay", WECHAT_GREEN, "wechat_btn.bmp")
-    create_btn("  Alipay", ALIPAY_BLUE, "alipay_btn.bmp")
+    create_btn("  WeChat Pay", WECHAT_GREEN, "wechat_btn.bmp", 130, 26)
+    create_btn("  Alipay", ALIPAY_BLUE, "alipay_btn.bmp", 130, 26)
     create_qr_placeholder()
     create_step_done()
     print(f"\n所有资源已生成到 {OUT}/")
