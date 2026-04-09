@@ -1,84 +1,37 @@
-# 修复版 — PayLauncher_fixed.nsi
+# 修复日志
 
-## 修复的问题
+## v2 - 2026-04-09
 
-### 1. 布局溢出（按钮不可见/不可点）— 核心问题
+### PayLauncher.nsi（美化 UI 版）— 11 处修复
 
-**原问题**：所有控件布局延伸到 510u，但 nsDialogs 默认可用区域只有 ~335u 高。底部的「验证支付」按钮(440u)、退出按钮(474u)、版权文字(500u)全部被裁剪。
+| # | 原始问题 | 修复 |
+|---|---------|------|
+| 1 | 缺少 GDI 句柄变量，图片加载后无法跟踪/释放 | 新增 `$hBitmap_QR`、`$hBitmap_Placeholder` 两个句柄变量 |
+| 2 | 不创建目录，`$TEMP\PayLauncher\assets` 可能不存在 | 加 `CreateDirectory "$INSTDIR"` + `"$INSTDIR\assets"` |
+| 3 | 硬编码 `$TEMP\PayLauncher` 路径 | 全部改用 `$INSTDIR`（由 `InstallDir` 统一管理） |
+| 4 | 占位图从未加载 — `${NSD_CreateBitmap}` 创建了控件但没塞图片 | 创建后立即 `${NSD_SetImage}` 加载 `qr_placeholder.bmp` |
+| 5 | GDI 对象泄漏 — 字体/图片句柄从未释放 | `nsDialogs::Show` 后用 `System::Call "gdi32::DeleteObject"` 清理 |
+| 6 | curl.exe 未存在检查 | `IfFileExists` 检查，不存在时报错并 Return |
+| 7 | curl 无超时，服务器无响应时永久阻塞 | 全部加 `--connect-timeout 10 --max-time 15` |
+| 8 | `${NSD_SetImage}` 句柄用错变量 | 改用专用变量，加载前先释放旧句柄 |
+| 9 | 二维码下载失败后继续加载 | 加 `IfFileExists` 检查 |
+| 10 | 二次验证无超时 | 加 `--connect-timeout 5 --max-time 10` |
+| 11 | 清理路径硬编码 | `RMDir /r` 改用 `$INSTDIR` |
 
-**修复**：
-- 整体重排布局，所有控件压缩到 430u 以内
-- 步骤指示器从 100u → 88u，高度缩减
-- 支付按钮从 166u → 136u，高度缩减
-- 二维码区域从 205u→168u 到 340u→334u
-- 操作按钮从 440u/474u → 365u/393u
-- 版权文字从 500u → 418u
+### PayLauncher_fixed.nsi（浏览器轮询版）— 7 处修复
 
-### 2. 按钮背景色不生效（按钮显示为灰色）
+| # | 原始问题 | 修复 |
+|---|---------|------|
+| 1 | `SetTimer` 回调不工作 — 函数名字符串不能作回调参数 | 改用 `PeekMessage` 手动消息循环 + `SetTimer` 发 `WM_TIMER` 消息 |
+| 2 | 路径不一致 | 全部统一为 `$INSTDIR`，加 `CreateDirectory` |
+| 3 | curl.exe 不存在时报错信息不明 | 错误提示包含完整路径 |
+| 4 | curl 无超时 | 全部加 `--connect-timeout` + `--max-time` |
+| 5 | `last_response.txt` 路径硬编码 | 改用 `$INSTDIR\last_response.txt` |
+| 6 | GDI 字体未清理 | 改用 `System::Call "gdi32::DeleteObject"` |
+| 7 | `run.exe` 不存在时崩溃 | 加 `${If} ${FileExists}` 检查 |
 
-**原问题**：`SetCtlColors $Button_Wechat ${COLOR_TEXT_LIGHT} ${COLOR_WECHAT}` 对标准按钮无效，NSIS 标准按钮不支持背景色修改。
+## v1 - 初始版本
 
-**修复**：
-- 改用 `${NSD_SetImage}` 将彩色 BMP 图片加载到按钮上
-- 按钮文本为空 `""`，完全由 BMP 图片决定外观
-- 移除所有无效的 `SetCtlColors` 按钮背景色调用
-
-### 3. `calc()` 语法无效
-
-**原问题**：`${NSD_CreateLabel} 12u 60u calc(100%-24u) 35u ""` — NSIS 不支持 CSS calc()。
-
-**修复**：改为具体数值 `286u`。
-
-### 4. `nsDialogs::Create /NOUNLOAD 1018` 标志废弃
-
-**修复**：改为 `nsDialogs::Create 1018`。
-
-### 5. GDI 资源泄漏
-
-**原问题**：
-- `${NSD_SetImage}` 返回的 HBITMAP 句柄未保存，无法释放
-- 多个字体句柄从未调用 `DeleteFontObject`
-- CreateStepIndicator 中创建的 `$0` 临时字体从未释放
-
-**修复**：
-- 新增 `$hQRBitmap` 变量保存二维码位图句柄
-- 更新二维码前先调用 `${NSD_FreeImage} $hQRBitmap`
-- 新增 `!macro CleanUpFonts` 统一释放所有字体和位图句柄
-- 使用 `System::Call 'gdi32::DeleteObject'` 释放字体
-
-### 6. 无边框容器
-
-**原问题**：`${NSD_CreateLabel} 68u 222u 174u 174u ""` 只是空白 Label，无边框效果。
-
-**修复**：改为 `${NSD_CreateGroupBox}`，自带边框绘制。
-
-### 7. 无法关闭窗口
-
-**原问题**：`PaymentPageLeave` 中 `$OrderId == ""` 时直接 `Abort`，用户在未创建订单时无法关闭窗口。
-
-**修复**：`$OrderId == ""` 时改为 `Return`（允许正常退出）。
-
-### 8. 未使用的变量
-
-**清理**：移除声明但未使用的 `$Label_AmountUnit`、`$Icon_Header`、`$GroupBox_Pay` 等变量。
-
-## 布局对比（Y 坐标）
-
-| 控件 | 原始 | 修复后 |
-|------|------|--------|
-| 顶部横幅 | 0~55u | 0~50u |
-| 金额区域 | 60~95u | 54~84u |
-| 步骤指示器 | 100~140u | 88~115u |
-| 支付方式 | 148~200u | 120~162u |
-| 二维码区域 | 205~400u | 168~334u |
-| 状态文字 | 418u | 348u |
-| 验证按钮 | 440u | 365u |
-| 退出按钮 | 474u | 393u |
-| 版权文字 | 500u | 418u |
-| **总高度** | **510u ❌** | **428u ✅** |
-
-## 注意事项
-
-1. **BMP 格式**：nsDialogs 要求 24-bit BMP（非 RLE 压缩），PIL 默认输出即为 24-bit，无需修改 `gen_assets.py`
-2. **按钮 BMP 尺寸**：wechat_btn.bmp / alipay_btn.bmp 应为 130x26 像素以匹配按钮尺寸（原脚本为 135x30，需重新生成）
-3. **测试**：编译后在 Windows 上运行验证所有按钮可点击、所有区域可见
+- 基础功能：NSIS 付费启动器 + 后端验证服务
+- 支持微信支付/支付宝扫码
+- Demo 模式测试
