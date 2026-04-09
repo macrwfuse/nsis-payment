@@ -1,6 +1,6 @@
 ;======================================================
-; 付费启动器 NSIS 脚本 — 修复版
-; 修复：按钮显示、选项不可选、布局溢出、资源泄漏
+; 付费启动器 NSIS 脚本 — 最终修复版
+; 修复：按钮不可选、图片不显示、布局溢出、资源泄漏
 ;======================================================
 
 !include "MUI2.nsh"
@@ -10,7 +10,7 @@
 !include "FileFunc.nsh"
 !include "WinCore.nsh"
 
-; 抑制 MUI2 内部未使用变量的警告（自定义页面不使用 MUI 标准控件）
+; 抑制 MUI2 内部未使用变量的警告
 !pragma warning disable 6001
 
 ;------------------------------------------------------
@@ -22,14 +22,13 @@ InstallDir "$TEMP\PayLauncher"
 RequestExecutionLevel user
 ShowInstDetails nevershow
 
-; 自定义窗口尺寸 — 加高到 550u 以容纳所有控件
 !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
 
-; 调整 nsDialogs 页面尺寸（关键修复）
-; 宽度 306u, 高度 380u → 实际可用区域约 520x600 像素
-; 注意：nsDialogs 尺寸需通过 !define 预定义
-!define PAYPAGE_WIDTH  306
-!define PAYPAGE_HEIGHT 380
+; Windows 常量
+!define BS_BITMAP      0x80
+!define BM_SETIMAGE    0xF7
+!define IMAGE_BITMAP    0
+!define GWL_STYLE      -16
 
 ;------------------------------------------------------
 ; 颜色定义
@@ -48,7 +47,6 @@ ShowInstDetails nevershow
 !define COLOR_BORDER      "E8E8E8"
 !define COLOR_STEP_BG     "F0F0F0"
 !define COLOR_STEP_DONE   "4361EE"
-!define COLOR_DIVIDER     "EEEEEE"
 !define COLOR_AMOUNT_BG   "F8F9FF"
 !define COLOR_LINK        "BBBBBB"
 
@@ -83,10 +81,13 @@ Var ProductName
 Var MaxRetryCount
 Var CurrentRetry
 Var TempQRFile
+Var TempQRBmp         ; 转换后的 BMP 路径
 Var StepCompleted
-Var hQRBitmap       ; 二维码位图句柄（用于释放）
+Var hQRBitmap         ; 二维码位图句柄
+Var hWechatBtnBmp     ; 微信按钮位图句柄
+Var hAlipayBtnBmp     ; 支付宝按钮位图句柄
 
-; 字体句柄（统一管理，防止泄漏）
+; 字体句柄
 Var hFont_Title
 Var hFont_Subtitle
 Var hFont_Amount
@@ -128,8 +129,11 @@ Section "Main"
   StrCpy $CurrentRetry "0"
   StrCpy $StepCompleted "0"
   StrCpy $TempQRFile "$TEMP\PayLauncher\assets\qr_temp.png"
+  StrCpy $TempQRBmp "$TEMP\PayLauncher\assets\qr_temp.bmp"
   StrCpy $OrderId ""
   StrCpy $hQRBitmap ""
+  StrCpy $hWechatBtnBmp ""
+  StrCpy $hAlipayBtnBmp ""
 
 SectionEnd
 
@@ -138,60 +142,50 @@ SectionEnd
 ;------------------------------------------------------
 Function PaymentPage
 
-  ; 隐藏默认的 MUI 头部
   !insertmacro MUI_HEADER_TEXT "" ""
 
-  ; ========== 创建对话框 ==========
-  ; 修复：移除废弃的 /NOUNLOAD 标志
   nsDialogs::Create 1018
   Pop $Dialog
   ${If} $Dialog == error
     Abort
   ${EndIf}
 
-  ; 设置对话框背景色
   SetCtlColors $Dialog "" ${COLOR_BG}
 
-  ; ========== 顶部横幅区域 (0 ~ 50u) ==========
-  ; 深色背景条
+  ; ========== 顶部横幅 (0 ~ 50u) ==========
   ${NSD_CreateLabel} 0 0 100% 50u ""
   Pop $0
   SetCtlColors $0 ${COLOR_TEXT_LIGHT} ${COLOR_HEADER}
 
-  ; 大标题
   ${NSD_CreateLabel} 12u 6u 80% 16u "软件激活"
   Pop $Label_Title
   SetCtlColors $Label_Title ${COLOR_TEXT_LIGHT} ${COLOR_HEADER}
   CreateFont $hFont_Title "微软雅黑" 14 700
   SendMessage $Label_Title ${WM_SETFONT} $hFont_Title 1
 
-  ; 副标题
   ${NSD_CreateLabel} 12u 26u 80% 12u "完成支付即可使用 $ProductName"
   Pop $Label_Subtitle
   SetCtlColors $Label_Subtitle "B0B0B0" ${COLOR_HEADER}
   CreateFont $hFont_Subtitle "微软雅黑" 8 400
   SendMessage $Label_Subtitle ${WM_SETFONT} $hFont_Subtitle 1
 
-  ; ========== 金额展示区域 (54u ~ 84u) ==========
+  ; ========== 金额区域 (54u ~ 84u) ==========
   ${NSD_CreateLabel} 10u 54u 286u 28u ""
   Pop $0
   SetCtlColors $0 "" ${COLOR_AMOUNT_BG}
 
-  ; "应付金额" 标签
   ${NSD_CreateLabel} 16u 57u 50u 10u "应付金额"
   Pop $0
   SetCtlColors $0 ${COLOR_TEXT_SEC} ${COLOR_AMOUNT_BG}
   CreateFont $hFont_Footer "微软雅黑" 7 400
   SendMessage $0 ${WM_SETFONT} $hFont_Footer 1
 
-  ; 金额数字
   ${NSD_CreateLabel} 16u 68u 70u 14u "$$ $ProductAmount"
   Pop $Label_Amount
   SetCtlColors $Label_Amount ${COLOR_ACCENT} ${COLOR_AMOUNT_BG}
   CreateFont $hFont_Amount "Consolas" 14 700
   SendMessage $Label_Amount ${WM_SETFONT} $hFont_Amount 1
 
-  ; 右侧说明
   ${NSD_CreateLabel} 130u 60u 150u 20u "$ProductName$\r$\n一次性付费，终身使用"
   Pop $0
   SetCtlColors $0 ${COLOR_TEXT_SEC} ${COLOR_AMOUNT_BG}
@@ -201,48 +195,53 @@ Function PaymentPage
   ; ========== 步骤指示器 (88u ~ 115u) ==========
   Call CreateStepIndicator
 
-  ; ========== 支付方式选择 (120u ~ 155u) ==========
+  ; ========== 支付方式选择 (120u ~ 162u) ==========
   ${NSD_CreateLabel} 10u 120u 100% 12u "① 选择支付方式"
   Pop $0
   SetCtlColors $0 ${COLOR_TEXT} transparent
   CreateFont $hFont_QRTitle "微软雅黑" 8 700
   SendMessage $0 ${WM_SETFONT} $hFont_QRTitle 1
 
-  ; ===== 修复：按钮用 BMP 图片实现彩色 =====
-  ; 微信按钮（owner-drawn 风格，贴图实现颜色）
+  ; ===== 修复：按钮用 BS_BITMAP + BM_SETIMAGE 实现彩色 =====
+  ; 微信按钮
   ${NSD_CreateButton} 10u 136u 130u 26u ""
   Pop $Button_Wechat
   ${NSD_OnClick} $Button_Wechat OnWechatClick
-  CreateFont $hFont_Button "微软雅黑" 9 700
-  ; 用位图覆盖按钮外观
+  ; 添加 BS_BITMAP 风格，使按钮接受位图
+  System::Call "user32::GetWindowLong(i $Button_Wechat, i ${GWL_STYLE})i.r0"
+  IntOp $0 $0 | ${BS_BITMAP}
+  System::Call "user32::SetWindowLong(i $Button_Wechat, i ${GWL_STYLE}, i $0)"
+  ; 加载位图到按钮
+  System::Call "user32::SendMessage(i $Button_Wechat, i ${BM_SETIMAGE}, i ${IMAGE_BITMAP}, i 0)"
   StrCpy $0 "$TEMP\PayLauncher\assets\wechat_btn.bmp"
-  ${NSD_SetImage} $Button_Wechat $0 $1
+  ${NSD_SetImage} $Button_Wechat $0 $hWechatBtnBmp
 
   ; 支付宝按钮
   ${NSD_CreateButton} 166u 136u 130u 26u ""
   Pop $Button_Alipay
   ${NSD_OnClick} $Button_Alipay OnAlipayClick
+  System::Call "user32::GetWindowLong(i $Button_Alipay, i ${GWL_STYLE})i.r0"
+  IntOp $0 $0 | ${BS_BITMAP}
+  System::Call "user32::SetWindowLong(i $Button_Alipay, i ${GWL_STYLE}, i $0)"
+  System::Call "user32::SendMessage(i $Button_Alipay, i ${BM_SETIMAGE}, i ${IMAGE_BITMAP}, i 0)"
   StrCpy $0 "$TEMP\PayLauncher\assets\alipay_btn.bmp"
-  ${NSD_SetImage} $Button_Alipay $1 $2
+  ${NSD_SetImage} $Button_Alipay $0 $hAlipayBtnBmp
 
-  ; ========== 二维码区域 (168u ~ 340u) ==========
+  ; ========== 二维码区域 (168u ~ 334u) ==========
   ${NSD_CreateLabel} 10u 168u 100% 12u "② 扫描二维码完成支付"
   Pop $Label_QRTitle
   SetCtlColors $Label_QRTitle ${COLOR_TEXT} transparent
   SendMessage $Label_QRTitle ${WM_SETFONT} $hFont_QRTitle 1
 
-  ; 二维码边框容器 — 使用 GroupBox 风格
   ${NSD_CreateGroupBox} 58u 182u 190u 150u ""
   Pop $GroupBox_QR
 
-  ; 二维码占位图
   ${NSD_CreateBitmap} 65u 190u 176u 136u ""
   Pop $Bitmap_QR
   ; 加载占位图
   StrCpy $0 "$TEMP\PayLauncher\assets\qr_placeholder.bmp"
   ${NSD_SetImage} $Bitmap_QR $0 $hQRBitmap
 
-  ; 二维码下方提示
   ${NSD_CreateLabel} 58u 334u 190u 10u "请使用手机扫描上方二维码"
   Pop $Label_QRSub
   SetCtlColors $Label_QRSub ${COLOR_TEXT_SEC} transparent
@@ -255,15 +254,13 @@ Function PaymentPage
   CreateFont $hFont_Status "微软雅黑" 8 400
   SendMessage $Label_Status ${WM_SETFONT} $hFont_Status 1
 
-  ; ========== 操作按钮 (365u ~ 390u) ==========
-  ; 验证支付按钮 — 使用标准按钮 + 文字颜色（修复背景色无效问题）
+  ; ========== 操作按钮 (365u ~ 418u) ==========
   ${NSD_CreateButton} 70u 365u 170u 24u "③ 我已完成支付，验证"
   Pop $Button_Check
   CreateFont $hFont_ButtonSmall "微软雅黑" 8 700
   SendMessage $Button_Check ${WM_SETFONT} $hFont_ButtonSmall 1
   ${NSD_OnClick} $Button_Check OnCheckPayment
 
-  ; 退出按钮
   ${NSD_CreateButton} 70u 393u 170u 20u "取消并退出"
   Pop $Button_Exit
   CreateFont $0 "微软雅黑" 7 400
@@ -279,7 +276,7 @@ Function PaymentPage
 
   nsDialogs::Show
 
-  ; 释放所有字体句柄
+  ; ===== 释放所有资源 =====
   System::Call 'gdi32::DeleteObject(i $hFont_Title)'
   System::Call 'gdi32::DeleteObject(i $hFont_Subtitle)'
   System::Call 'gdi32::DeleteObject(i $hFont_Amount)'
@@ -291,9 +288,14 @@ Function PaymentPage
   System::Call 'gdi32::DeleteObject(i $hFont_Footer)'
   System::Call 'gdi32::DeleteObject(i $hFont_QRTitle)'
   System::Call 'gdi32::DeleteObject(i $hFont_Small)'
-  ; 释放二维码位图
   ${If} $hQRBitmap != ""
     ${NSD_FreeImage} $hQRBitmap
+  ${EndIf}
+  ${If} $hWechatBtnBmp != ""
+    ${NSD_FreeImage} $hWechatBtnBmp
+  ${EndIf}
+  ${If} $hAlipayBtnBmp != ""
+    ${NSD_FreeImage} $hAlipayBtnBmp
   ${EndIf}
 
 FunctionEnd
@@ -306,7 +308,7 @@ Function CreateStepIndicator
   CreateFont $hFont_Step "微软雅黑" 9 700
   CreateFont $hFont_StepLabel "微软雅黑" 6 400
 
-  ; 步骤1: 选择支付
+  ; 步骤1
   ${NSD_CreateLabel} 30u 88u 18u 18u "1"
   Pop $Label_Step1Num
   SetCtlColors $Label_Step1Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
@@ -317,12 +319,11 @@ Function CreateStepIndicator
   SetCtlColors $Label_Step1Text ${COLOR_TEXT} transparent
   SendMessage $Label_Step1Text ${WM_SETFONT} $hFont_StepLabel 1
 
-  ; 连接线1
   ${NSD_CreateLabel} 50u 97u 75u 1u ""
   Pop $0
   SetCtlColors $0 "" ${COLOR_BORDER}
 
-  ; 步骤2: 扫码支付
+  ; 步骤2
   ${NSD_CreateLabel} 128u 88u 18u 18u "2"
   Pop $Label_Step2Num
   SetCtlColors $Label_Step2Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_BG}
@@ -333,12 +334,11 @@ Function CreateStepIndicator
   SetCtlColors $Label_Step2Text ${COLOR_TEXT_SEC} transparent
   SendMessage $Label_Step2Text ${WM_SETFONT} $hFont_StepLabel 1
 
-  ; 连接线2
   ${NSD_CreateLabel} 148u 97u 75u 1u ""
   Pop $0
   SetCtlColors $0 "" ${COLOR_BORDER}
 
-  ; 步骤3: 完成激活
+  ; 步骤3
   ${NSD_CreateLabel} 226u 88u 18u 18u "3"
   Pop $Label_Step3Num
   SetCtlColors $Label_Step3Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_BG}
@@ -352,21 +352,18 @@ Function CreateStepIndicator
 FunctionEnd
 
 ;------------------------------------------------------
-; 更新步骤指示器状态
+; 更新步骤指示器
 ;------------------------------------------------------
 Function UpdateStepIndicator
   Exch $R0
-
   ${If} $R0 >= 2
     SetCtlColors $Label_Step2Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
     SetCtlColors $Label_Step2Text ${COLOR_TEXT} transparent
   ${EndIf}
-
   ${If} $R0 >= 3
     SetCtlColors $Label_Step3Num ${COLOR_TEXT_LIGHT} ${COLOR_STEP_DONE}
     SetCtlColors $Label_Step3Text ${COLOR_TEXT} transparent
   ${EndIf}
-
   Pop $R0
 FunctionEnd
 
@@ -376,16 +373,10 @@ FunctionEnd
 Function OnWechatClick
   StrCpy $PaymentType "wechat"
   StrCpy $StepCompleted "1"
-
-  ; 更新状态提示（按钮本身由 BMP 决定外观，此处不改按钮颜色）
   SetCtlColors $Label_Status ${COLOR_WECHAT} transparent
   ${NSD_SetText} $Label_Status "正在生成微信支付二维码..."
-
-  ; 更新步骤
   Push 2
   Call UpdateStepIndicator
-
-  ; 创建订单
   Call CreatePaymentOrder
 FunctionEnd
 
@@ -395,13 +386,10 @@ FunctionEnd
 Function OnAlipayClick
   StrCpy $PaymentType "alipay"
   StrCpy $StepCompleted "1"
-
   SetCtlColors $Label_Status ${COLOR_ALIPAY} transparent
   ${NSD_SetText} $Label_Status "正在生成支付宝支付二维码..."
-
   Push 2
   Call UpdateStepIndicator
-
   Call CreatePaymentOrder
 FunctionEnd
 
@@ -430,18 +418,29 @@ Function CreatePaymentOrder
     Pop $2
 
     ${If} $2 != ""
-      ; 先释放旧的二维码位图（修复 GDI 泄漏）
+      ; 先释放旧位图
       ${If} $hQRBitmap != ""
         ${NSD_FreeImage} $hQRBitmap
         StrCpy $hQRBitmap ""
       ${EndIf}
 
+      ; 下载二维码图片
       nsExec::ExecToStack '"$TEMP\PayLauncher\curl.exe" -s -o "$TempQRFile" "$2"'
       Pop $0
       Pop $1
 
-      ; 保存新的位图句柄
-      ${NSD_SetImage} $Bitmap_QR "$TempQRFile" $hQRBitmap
+      ; ===== 修复：将 PNG 转换为 BMP（${NSD_SetImage} 只支持 BMP）=====
+      nsExec::ExecToStack 'powershell -ExecutionPolicy Bypass -Command "[Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; [System.Drawing.Image]::FromFile('$TempQRFile').Save('$TempQRBmp', [System.Drawing.Imaging.ImageFormat]::Bmp)"'
+      Pop $0
+      Pop $1
+
+      ; 加载转换后的 BMP
+      ${If} ${FileExists} "$TempQRBmp"
+        ${NSD_SetImage} $Bitmap_QR "$TempQRBmp" $hQRBitmap
+      ${Else}
+        ; 转换失败，加载占位图
+        ${NSD_SetImage} $Bitmap_QR "$TEMP\PayLauncher\assets\qr_placeholder.bmp" $hQRBitmap
+      ${EndIf}
 
       ${If} $PaymentType == "wechat"
         ${NSD_SetText} $Label_QRSub "请使用微信扫一扫支付 $$ $ProductAmount"
@@ -467,10 +466,8 @@ Function OnCheckPayment
     Call ShowError_NoOrder
     Return
   ${EndIf}
-
   SetCtlColors $Label_Status ${COLOR_ACCENT} transparent
   ${NSD_SetText} $Label_Status "正在查询支付状态..."
-
   Call CheckPaymentStatus
 FunctionEnd
 
@@ -490,19 +487,14 @@ Function CheckPaymentStatus
 
     ${If} $2 == "paid"
       StrCpy $StepCompleted "3"
-
       Push 3
       Call UpdateStepIndicator
-
       SetCtlColors $Label_Status ${COLOR_SUCCESS} transparent
       ${NSD_SetText} $Label_Status "支付成功！正在启动程序..."
-
       ${NSD_SetText} $Label_Title "激活成功"
       ${NSD_SetText} $Label_Subtitle "正在为您启动 $ProductName ..."
-
       Sleep 1500
       SendMessage $Dialog ${WM_CLOSE} 0 0
-
     ${ElseIf} $2 == "expired"
       StrCpy $OrderId ""
       StrCpy $StepCompleted "0"
@@ -517,7 +509,7 @@ Function CheckPaymentStatus
 FunctionEnd
 
 ;------------------------------------------------------
-; 错误提示函数
+; 错误提示
 ;------------------------------------------------------
 Function ShowError_GetQR
   SetCtlColors $Label_Status ${COLOR_ERROR} transparent
@@ -546,7 +538,7 @@ Function ShowError_VerifyFail
 FunctionEnd
 
 ;------------------------------------------------------
-; 退出点击 — 修复：无论是否有订单都允许退出
+; 退出
 ;------------------------------------------------------
 Function OnExitClick
   MessageBox MB_YESNO|MB_ICONQUESTION "确定要退出吗？$\r$\n退出后需要重新操作才能使用。" IDYES quit
@@ -556,15 +548,13 @@ Function OnExitClick
 FunctionEnd
 
 ;------------------------------------------------------
-; 页面离开 — 修复：无订单时直接允许退出
+; 页面离开 — 无订单时允许退出
 ;------------------------------------------------------
 Function PaymentPageLeave
-  ; 修复：没有订单时允许正常退出（点 X 关闭窗口）
   ${If} $OrderId == ""
     Return
   ${EndIf}
 
-  ; 有订单时做二次验证
   nsExec::ExecToStack '"$TEMP\PayLauncher\curl.exe" -s "$PayApiUrl/check_status?order_id=$OrderId"'
   Pop $0
   Pop $1
@@ -574,7 +564,6 @@ Function PaymentPageLeave
     Push $1
     Call SimpleJsonExtract
     Pop $2
-
     ${If} $2 != "paid"
       MessageBox MB_OK|MB_ICONEXCLAMATION "支付尚未完成，请先完成支付后再继续。"
       Abort
@@ -583,7 +572,7 @@ Function PaymentPageLeave
 FunctionEnd
 
 ;------------------------------------------------------
-; 安装后 - 启动目标程序
+; 安装后
 ;------------------------------------------------------
 Section "-Post"
   ExecWait '"$TEMP\PayLauncher\run.exe"'
